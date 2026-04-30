@@ -15,29 +15,95 @@
 
    ============================================================ */
 
-/* ---------- ESTADO GLOBAL ---------- */
-let saldo = 2450.75;
+/* ============================================================
+   PERSISTENCIA · localStorage
+   ============================================================ */
 
-let txHistory = [
-  { who:"Recarga Yape",      amount:+150,     status:"ok",      date:"Hoy, 08:12",     icon:"in"  },
-  { who:"María Fernández",   amount:-85.50,   status:"ok",      date:"Ayer, 19:33",    icon:"out" },
-  { who:"Netflix Perú",      amount:-44.90,   status:"ok",      date:"Ayer, 12:01",    icon:"out" },
-  { who:"Carlos Ríos",       amount:-200.00,  status:"pending", date:"22 abr, 16:48",  icon:"out" },
-  { who:"Sueldo abril",      amount:+3200.00, status:"ok",      date:"01 abr, 09:00",  icon:"in"  },
-  { who:"Sedapal",           amount:-58.20,   status:"ok",      date:"15 abr, 10:22",  icon:"out" },
-  { who:"Luz del Sur",       amount:-112.40,  status:"ok",      date:"12 abr, 11:08",  icon:"out" },
-  { who:"Pedro Quispe",      amount:-30.00,   status:"fail",    date:"08 abr, 21:55",  icon:"out" }
-];
+const STORAGE_KEY = 'pp_state_v1';
+const SESSION_KEY = 'pp_session_v1';
 
-let cards = [
-  { id:1, brand:"visa",   num:"4532 1234 5678 9012", name:"Diego Ramírez", exp:"08/27" },
-  { id:2, brand:"master", num:"5555 4444 3333 2222", name:"Diego Ramírez", exp:"03/29" }
-];
+function getDefaultState(){
+  return {
+    profile: {
+      name:        "Diego Ramírez",
+      dni:         "70125421",
+      email:       "diego.ramirez@perupay.pe",
+      phone:       "987654321",
+      account:     "00112-345-6789014471",
+      lastDigits:  "4471",
+      initials:    "DR"
+    },
+    saldo: 2450.75,
+    txHistory: [
+      { who:"Sueldo abril",     amount:+3200.00, status:"ok",      date:"01 abr, 09:00",  icon:"in"  },
+      { who:"Luz del Sur",      amount:-112.40,  status:"ok",      date:"12 abr, 11:08",  icon:"out" },
+      { who:"Sedapal",          amount:-58.20,   status:"ok",      date:"15 abr, 10:22",  icon:"out" },
+      { who:"Carlos Ríos",      amount:-200.00,  status:"pending", date:"22 abr, 16:48",  icon:"out" },
+      { who:"Pedro Quispe",     amount:-30.00,   status:"fail",    date:"08 abr, 21:55",  icon:"out" },
+      { who:"Netflix Perú",     amount:-44.90,   status:"ok",      date:"Ayer, 12:01",    icon:"out" },
+      { who:"María Fernández",  amount:-85.50,   status:"ok",      date:"Ayer, 19:33",    icon:"out" },
+      { who:"Recarga Yape",     amount:+150.00,  status:"ok",      date:"Hoy, 08:12",     icon:"in"  }
+    ],
+    cards: [
+      { id:1, brand:"visa",   num:"4532 1234 5678 9012", name:"Diego Ramírez", exp:"08/27" },
+      { id:2, brand:"master", num:"5555 4444 3333 2222", name:"Diego Ramírez", exp:"03/29" }
+    ]
+  };
+}
+
+function loadState(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return getDefaultState();
+    const parsed = JSON.parse(raw);
+    // merge con defaults para tolerar versiones viejas en localStorage
+    const def = getDefaultState();
+    return {
+      profile:   { ...def.profile, ...(parsed.profile || {}) },
+      saldo:     typeof parsed.saldo === 'number' ? parsed.saldo : def.saldo,
+      txHistory: Array.isArray(parsed.txHistory) ? parsed.txHistory : def.txHistory,
+      cards:     Array.isArray(parsed.cards)     ? parsed.cards     : def.cards
+    };
+  } catch(e) {
+    return getDefaultState();
+  }
+}
+
+function persist(){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      profile, saldo, txHistory, cards
+    }));
+  } catch(e){
+    console.error("No se pudo guardar el estado:", e);
+  }
+}
+
+function resetData(){
+  if (!confirm("¿Restablecer todos los datos a los valores iniciales? Se perderán transferencias y tarjetas agregadas.")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  const fresh = getDefaultState();
+  profile   = fresh.profile;
+  saldo     = fresh.saldo;
+  txHistory = fresh.txHistory;
+  cards     = fresh.cards;
+  persist();
+  renderAll();
+  showToast("Datos restablecidos");
+}
+
+/* ---------- ESTADO GLOBAL EN MEMORIA ---------- */
+let _state = loadState();
+let profile   = _state.profile;
+let saldo     = _state.saldo;
+let txHistory = _state.txHistory;
+let cards     = _state.cards;
 
 let pendingTransfer = null;
-let isProcessing = false;          // declarada pero NO usada (ver [BUG #EST-1])
+let isProcessing    = false;
 let currentMovFilter = "all";
-let loginTabType = "dni";
+let loginTabType     = "dni";
+let selectedService  = null;
 
 /* ============================================================
    1. LOGIN
@@ -55,22 +121,22 @@ function doLogin(){
   const user = document.getElementById('loginUser').value.trim();
   const pass = document.getElementById('loginPass').value;
 
-  // [BUG #SEC-2] Backdoor de demostración olvidado: si user === "admin"
-  // se ignora completamente la contraseña.
+  // [BUG #SEC-2] Backdoor de demo olvidado: si user === "admin" se ignora
+  // completamente la contraseña.
   if (user === "admin") {
     showToast("Bienvenido, administrador");
-    enterApp();
+    enterApp(true);
     return;
   }
 
   // [BUG #VAL-1] La contraseña mínima son 4 caracteres (debería ser >=8).
   if (!user || pass.length < 4) {
-    // [BUG #UX-2] El mensaje de error no distingue si falla user o password.
+    // [BUG #UX-2] El mensaje no distingue si falla user o password.
     showToast("Credenciales inválidas", true);
     return;
   }
 
-  // [BUG #VAL-2] El DNI peruano tiene 8 dígitos. Esta regex acepta de 5 a 12.
+  // [BUG #VAL-2] El DNI peruano tiene 8 dígitos. Esta regex acepta 5 a 12.
   if (loginTabType === 'dni' && !/^\d{5,12}$/.test(user)) {
     showToast("DNI inválido", true);
     return;
@@ -83,22 +149,32 @@ function doLogin(){
   }
 
   // [BUG #SEC-3] Password guardado en localStorage en texto plano,
-  // junto con el usuario. Cualquier script en la pestaña lo lee.
+  // junto con el usuario.
   localStorage.setItem('pp_user', user);
   localStorage.setItem('pp_pass', pass);
 
-  enterApp();
+  // sesión "real" - registra fecha de último acceso
+  const session = {
+    user,
+    type:        loginTabType,
+    loggedAt:    new Date().toISOString(),
+    lastAccess:  localStorage.getItem('pp_last_access') || null
+  };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  localStorage.setItem('pp_last_access', session.loggedAt);
+
+  enterApp(true);
 }
 
-function enterApp(){
+function enterApp(showWelcome){
   goTo('screen-home');
-  renderTx();
-  renderCards();
+  renderAll();
+  if (showWelcome) openWelcome();
 }
 
 function logout(){
-  // [BUG #SEC-4] No limpia localStorage al cerrar sesión, así que
-  // el password queda almacenado.
+  // [BUG #SEC-4] No limpia localStorage al cerrar sesión:
+  // los datos del estado y el password quedan persistidos.
   goTo('screen-login');
   showToast("Sesión cerrada");
 }
@@ -107,12 +183,49 @@ function logout(){
 // la sesión nunca expira (no hay token con TTL).
 (function autoLogin(){
   if (localStorage.getItem('pp_user')) {
-    setTimeout(enterApp, 50);
+    setTimeout(() => enterApp(true), 50);
   }
 })();
 
 /* ============================================================
-   2. NAVEGACIÓN
+   2. WELCOME MODAL · "Tus datos al iniciar sesión"
+   ============================================================ */
+
+function openWelcome(){
+  const modal = document.getElementById('welcomeModal');
+  if (!modal) return;
+
+  // Datos iniciales actuales (siempre coherentes con el estado en memoria)
+  document.getElementById('welName').textContent    = (profile.name || 'Cliente').split(' ')[0];
+  document.getElementById('welSaldo').textContent   = formatSoles(saldo);
+  document.getElementById('welAccount').textContent = '•••• ' + (profile.lastDigits || '----');
+  document.getElementById('welDni').textContent     = '••••' + (profile.dni || '').slice(-4);
+  document.getElementById('welEmail').textContent   = profile.email || '—';
+  document.getElementById('welTxCount').textContent = txHistory.length;
+  document.getElementById('welCards').textContent   = cards.length;
+
+  const lastAccess = (() => {
+    try{
+      const s = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
+      if (s.lastAccess) {
+        const d = new Date(s.lastAccess);
+        return d.toLocaleString('es-PE', { dateStyle:'medium', timeStyle:'short' });
+      }
+    } catch(e) {}
+    return 'primer ingreso';
+  })();
+  document.getElementById('welLast').textContent = 'Último acceso: ' + lastAccess;
+
+  modal.hidden = false;
+}
+
+function closeWelcome(){
+  const modal = document.getElementById('welcomeModal');
+  if (modal) modal.hidden = true;
+}
+
+/* ============================================================
+   3. NAVEGACIÓN
    ============================================================ */
 
 function goTo(id){
@@ -127,10 +240,12 @@ function goTo(id){
 
   if (id === 'screen-home') {
     renderTx();
-    // [BUG #DAT-2] Al volver al home NO se actualiza el saldo:
-    // queda fijo el valor inicial en el DOM aunque `saldo` haya cambiado.
+    renderHomeChrome();
+    // [BUG #DAT-2] Al volver al home NO se actualiza el saldo en el DOM:
+    // queda fijo el último valor renderizado aunque `saldo` haya cambiado
+    // tras una transferencia.
     // Falta intencional:
-    // document.getElementById('saldoView').textContent = saldo.toFixed(2);
+    // document.getElementById('saldoView').textContent = formatNumber(saldo);
   }
   if (id === 'screen-transfer') {
     document.getElementById('amount').value = '';
@@ -139,24 +254,74 @@ function goTo(id){
   }
   if (id === 'screen-cards')     renderCards();
   if (id === 'screen-movements') renderMovements();
+  if (id === 'screen-profile')   renderProfileForm();
 }
 
 /* ============================================================
-   3. TOAST
+   4. TOAST
    ============================================================ */
 
 function showToast(msg, isError=false){
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.className = 'toast show' + (isError ? ' error' : '');
-  // [BUG #UX-4] Toast desaparece a los 2.8s incluso para errores críticos
-  // (el usuario no alcanza a leerlos en operaciones financieras).
+  // [BUG #UX-4] Toast desaparece a los 2.8s incluso para errores críticos.
   setTimeout(() => { t.className = 'toast'; }, 2800);
 }
 
 /* ============================================================
-   4. HOME · LISTA DE TRANSACCIONES
+   5. FORMATO
    ============================================================ */
+
+function formatNumber(n){
+  // separador de miles + 2 decimales
+  return Number(n).toLocaleString('es-PE', { minimumFractionDigits:2, maximumFractionDigits:2 });
+}
+function formatSoles(n){
+  return 'S/ ' + formatNumber(n);
+}
+
+/* ============================================================
+   6. HOME · datos iniciales coherentes
+   ============================================================ */
+
+function renderHomeChrome(){
+  // saldo del balance card
+  const saldoView = document.getElementById('saldoView');
+  if (saldoView) saldoView.textContent = formatNumber(saldo);
+
+  // saludo del header (móvil)
+  const hello = document.getElementById('helloUser');
+  if (hello) {
+    const first = (profile.name || 'Cliente').split(' ')[0];
+    hello.textContent = `Hola, ${first} ✨`;
+  }
+
+  // Resumen del mes (aside) - ahora dinámico a partir de txHistory
+  renderMonthlySummary();
+}
+
+function renderMonthlySummary(){
+  const aside = document.querySelector('.aside');
+  if (!aside) return;
+
+  const completados = txHistory.filter(t => t.status === 'ok');
+  const ingresos    = completados.filter(t => t.amount > 0).reduce((a,t) => a + t.amount, 0);
+  const egresos     = completados.filter(t => t.amount < 0).reduce((a,t) => a + Math.abs(t.amount), 0);
+  const totalTx     = txHistory.length;
+  const pendientes  = txHistory.filter(t => t.status === 'pending').length;
+
+  const stats = aside.querySelector('.aside-card:nth-of-type(2)');
+  if (stats) {
+    stats.innerHTML = `
+      <h3>Resumen del mes</h3>
+      <div class="stat-row"><span class="k">Ingresos</span><span class="v" style="color:var(--ok)">+ ${formatSoles(ingresos)}</span></div>
+      <div class="stat-row"><span class="k">Egresos</span><span class="v" style="color:var(--danger)">- ${formatSoles(egresos)}</span></div>
+      <div class="stat-row"><span class="k">Movimientos</span><span class="v">${totalTx}</span></div>
+      <div class="stat-row"><span class="k">Pendientes</span><span class="v" style="color:var(--pending)">${pendientes}</span></div>
+    `;
+  }
+}
 
 function renderTx(){
   const list = document.getElementById('txList');
@@ -165,7 +330,7 @@ function renderTx(){
   txHistory.slice(0, 5).forEach(t => {
     const sign = t.amount >= 0 ? '+' : '-';
     // [BUG #UX-5] Formato de monto inconsistente: aquí no hay separador
-    // de miles, pero en el balance card sí (2,450.75).
+    // de miles, pero el balance card sí lo lleva (2,450.75).
     const amt = Math.abs(t.amount).toFixed(2);
 
     // [BUG #UX-6] Pendientes aparecen con el mismo color que completadas;
@@ -195,7 +360,7 @@ function renderTx(){
 }
 
 /* ============================================================
-   5. TRANSFERENCIAS
+   7. TRANSFERENCIAS
    ============================================================ */
 
 function goToConfirm(){
@@ -206,7 +371,7 @@ function goToConfirm(){
   const desc    = document.getElementById('desc').value.trim();
 
   // [BUG #VAL-4] parseFloat acepta "100abc" como 100.
-  // Tampoco rechaza negativos ni cero ni números absurdos como 99999999.
+  // Tampoco rechaza negativos ni cero.
   const monto = parseFloat(amount);
 
   if (!amount || isNaN(monto)) {
@@ -215,13 +380,13 @@ function goToConfirm(){
     return;
   }
 
-  // [BUG #VAL-5] No valida saldo disponible. Permite transferir más de lo que se tiene.
-  // [BUG #VAL-6] No valida la cuenta destino: vacío, letras, longitud distinta a CCI.
-  // [BUG #VAL-7] No valida que destino != cuenta origen (4471).
+  // [BUG #VAL-5] No valida saldo disponible.
+  // [BUG #VAL-6] No valida la cuenta destino: vacío, letras, longitud.
+  // [BUG #VAL-7] No valida que destino != cuenta origen.
 
   pendingTransfer = { monto, dest, bank, desc };
 
-  // [BUG #SEC-6] Cuenta destino mostrada COMPLETA sin enmascarar (debería ser •••• 9012).
+  // [BUG #SEC-6] Cuenta destino mostrada COMPLETA sin enmascarar.
   document.getElementById('cMonto').textContent  = 'S/ ' + monto.toFixed(2);
   document.getElementById('cCuenta').textContent = dest || '(sin cuenta)';
   document.getElementById('cBanco').textContent  = bank;
@@ -235,8 +400,7 @@ function goToConfirm(){
 
 function executeTransfer(){
   // [BUG #EST-1] Sin protección contra doble click. La variable existe pero
-  // el bloque que la usa está comentado: el usuario puede confirmar 3 veces
-  // y descontar saldo 3 veces.
+  // el bloque que la usa está comentado.
   // if (isProcessing) return;
   // isProcessing = true;
 
@@ -248,7 +412,7 @@ function executeTransfer(){
   const random = Math.random();
 
   setTimeout(() => {
-    // [BUG #EST-2] ~25%: spinner infinito sin timeout (caso del enunciado original).
+    // [BUG #EST-2] ~25%: spinner infinito sin timeout.
     // [BUG #EST-3] Aun así descuenta saldo y registra como pendiente.
     if (random < 0.25) {
       overlayText.textContent = "Procesando operación...";
@@ -260,6 +424,7 @@ function executeTransfer(){
         date: "Ahora",
         icon: "out"
       });
+      persist();
       return;
     }
 
@@ -275,9 +440,10 @@ function executeTransfer(){
         date: "Ahora",
         icon: "out"
       });
+      persist();
       showResult('fail',
         'No se pudo completar',
-        'Error',                           // [BUG #UX-7 ref] mensaje genérico
+        'Error',
         'REF: ' + Math.floor(Math.random() * 9999999)
       );
       return;
@@ -285,7 +451,7 @@ function executeTransfer(){
 
     saldo = saldo - pendingTransfer.monto;
 
-    // [BUG #LOG-3] El estado final depende de si el monto en céntimos es par o impar.
+    // [BUG #LOG-3] El estado final depende de la paridad del monto en céntimos.
     const realStatus = (Math.floor(pendingTransfer.monto * 100) % 2 === 0) ? "ok" : "pending";
     txHistory.unshift({
       who: "Transferencia a " + (pendingTransfer.dest || 'cuenta'),
@@ -294,6 +460,7 @@ function executeTransfer(){
       date: "Ahora",
       icon: "out"
     });
+    persist();
 
     showResult('ok',
       '¡Transferencia exitosa!',
@@ -324,7 +491,7 @@ function showResult(type, title, msg, ref){
 }
 
 /* ============================================================
-   6. TARJETAS
+   8. TARJETAS
    ============================================================ */
 
 function renderCards(){
@@ -356,8 +523,7 @@ function addCard(){
   const exp  = document.getElementById('ccExp').value.trim();
   const cvv  = document.getElementById('ccCvv').value.trim();
 
-  // [BUG #VAL-8] No valida algoritmo de Luhn: cualquier secuencia de 16
-  // dígitos (o incluso menos) se acepta.
+  // [BUG #VAL-8] No valida algoritmo de Luhn.
   if (!num || !name || !exp || !cvv) {
     showToast("Completa todos los campos", true);
     return;
@@ -365,13 +531,11 @@ function addCard(){
 
   // [BUG #VAL-9] Acepta cualquier formato de fecha. Mes 13, 00, 99 pasan.
   // Tampoco valida que la tarjeta no esté vencida.
-  // Lo correcto: regex MM/AA con 01<=MM<=12 y fecha >= mes actual.
 
   // [BUG #SEC-9] CVV escrito al console.log "para debug".
-  // Datos sensibles NUNCA deberían salir por consola.
   console.log("Nueva tarjeta:", { num, cvv });
 
-  // [BUG #LOG-4] Permite agregar la MISMA tarjeta dos veces (no valida duplicados).
+  // [BUG #LOG-4] Permite agregar la MISMA tarjeta dos veces (sin dedupe).
   let brand = "visa";
   if (num.startsWith("5")) brand = "master";
   if (num.startsWith("3")) brand = "amex";
@@ -383,13 +547,14 @@ function addCard(){
     name,
     exp
   });
+  persist();
 
   showToast("Tarjeta agregada");
   goTo('screen-cards');
 }
 
 /* ============================================================
-   7. MOVIMIENTOS (con filtros)
+   9. MOVIMIENTOS (con filtros)
    ============================================================ */
 
 document.addEventListener('click', (e) => {
@@ -410,8 +575,7 @@ function renderMovements(){
   let data = txHistory.slice();
 
   // [BUG #LOG-5] El ordenamiento por fecha es alfabético sobre el string,
-  // no cronológico. "01 abr" termina antes que "Hoy" pero "22 abr" antes
-  // que "Ayer" — el orden visible se rompe.
+  // no cronológico.
   data.sort((a, b) => a.date < b.date ? 1 : -1);
 
   if (currentMovFilter === 'in') {
@@ -426,12 +590,11 @@ function renderMovements(){
     // [BUG #LOG-7] Filtro "Esta semana" en realidad no filtra: devuelve todo.
     data = data;
   } else if (currentMovFilter === 'month') {
-    // [BUG #LOG-8] Filtro "Este mes" sólo busca strings con "abr",
-    // así que en mayo no mostrará nada y en abril mostrará todo.
+    // [BUG #LOG-8] Filtro "Este mes" sólo busca el string "abr" o "Hoy"/"Ayer".
     data = data.filter(t => t.date.indexOf('abr') !== -1 || t.date.indexOf('Hoy') !== -1 || t.date.indexOf('Ayer') !== -1);
   }
 
-  // [BUG #UX-8] El empty-state aparece SIEMPRE oculto, aunque la lista esté
+  // [BUG #UX-8] El empty-state está SIEMPRE oculto, aunque la lista esté
   // vacía (la condición está negada).
   if (empty) empty.style.display = data.length === 0 ? 'none' : 'none';
 
@@ -462,7 +625,7 @@ function renderMovements(){
 }
 
 /* ============================================================
-   8. RECARGA
+   10. RECARGA
    ============================================================ */
 
 function doRecharge(){
@@ -471,20 +634,20 @@ function doRecharge(){
   const amount = document.getElementById('rechargeAmount').value.trim();
   const monto  = parseFloat(amount);
 
-  // [BUG #VAL-10] Acepta cualquier longitud de teléfono. En Perú son 9 dígitos.
+  // [BUG #VAL-10] Acepta cualquier longitud de teléfono.
   if (!phone) {
     showToast("Falta el número", true);
     return;
   }
 
-  // [BUG #VAL-11] El teléfono acepta letras (no se valida que sea numérico).
-  // [BUG #VAL-12] Acepta montos negativos o cero. parseFloat("-50") pasa.
+  // [BUG #VAL-11] El teléfono acepta letras.
+  // [BUG #VAL-12] Acepta montos negativos o cero.
   if (isNaN(monto)) {
     showToast("Monto inválido", true);
     return;
   }
 
-  // [BUG #LOG-9] El subtítulo dice "5% de bonificación" pero el cálculo
+  // [BUG #LOG-9] El subtítulo dice "5% de bonificación" pero
   // multiplica por 0.005 → en realidad bonifica 0.5%.
   const bonus = monto * 0.005;
 
@@ -499,16 +662,15 @@ function doRecharge(){
     date:   new Date().toISOString().replace('T', ' ').slice(0, 19),
     icon:   "out"
   });
+  persist();
 
   showToast("Recarga realizada por S/ " + monto.toFixed(2));
   goTo('screen-home');
 }
 
 /* ============================================================
-   9. PAGAR SERVICIOS
+   11. PAGAR SERVICIOS
    ============================================================ */
-
-let selectedService = null;
 
 function selectService(name, type){
   selectedService = { name, type };
@@ -526,7 +688,7 @@ function payService(){
   }
 
   // [BUG #VAL-13] El código del servicio acepta cualquier longitud
-  // (incluso vacío en la siguiente línea — la condición está mal).
+  // (incluso vacío - condición mal formulada).
   if (code.length < 0) {
     showToast("Código requerido", true);
     return;
@@ -542,9 +704,7 @@ function payService(){
   const comision = 1.50;
   saldo = saldo - monto;   // ← debería ser - (monto + comision)
 
-  // [BUG #SEC-10] Al "compartir comprobante" se construye un URL que
-  // expone el código del servicio en query string (información sensible
-  // que va al historial del navegador y a logs de servidor).
+  // [BUG #SEC-10] El URL "compartir comprobante" expone datos en query string.
   const shareUrl = window.location.origin + "?svc=" + selectedService.name + "&code=" + code;
   console.log("Compartir:", shareUrl);
 
@@ -555,21 +715,30 @@ function payService(){
     date:   "Ahora",
     icon:   "out"
   });
+  persist();
 
   showToast("Pago realizado · Comisión: S/ " + comision.toFixed(2));
   goTo('screen-home');
 }
 
 /* ============================================================
-   10. PERFIL
+   12. PERFIL
    ============================================================ */
+
+function renderProfileForm(){
+  document.getElementById('inpName').value  = profile.name  || '';
+  document.getElementById('inpEmail').value = profile.email || '';
+  document.getElementById('inpPhone').value = profile.phone || '';
+  document.getElementById('pName').textContent = profile.name || '';
+  document.getElementById('pSub').textContent  = `Cuenta personal · DNI ••••${(profile.dni || '').slice(-4)}`;
+}
 
 function saveProfile(){
   const name  = document.getElementById('inpName').value.trim();
   const email = document.getElementById('inpEmail').value.trim();
   const phone = document.getElementById('inpPhone').value.trim();
 
-  // [BUG #VAL-14] Valida email con regex tan permisiva que pasa "abc@".
+  // [BUG #VAL-14] Email regex demasiado permisiva: pasa "abc@".
   if (!/^.+@.+$/.test(email)) {
     showToast("Email inválido", true);
     return;
@@ -581,28 +750,32 @@ function saveProfile(){
     return;
   }
 
-  // [BUG #SEC-11] El nombre se inyecta con innerHTML → XSS.
-  // Probar con: <img src=x onerror=alert(document.cookie)>
+  profile.name  = name;
+  profile.email = email;
+  profile.phone = phone;
+  persist();
+
+  // [BUG #SEC-11] El nombre se inyecta con innerHTML → XSS persistente
+  // (ahora también queda guardado en localStorage).
   document.getElementById('pName').innerHTML = name;
 
-  // [BUG #DAT-3] Cambiar el nombre actualiza pName pero NO actualiza:
+  // [BUG #DAT-3] Cambiar el nombre actualiza pName pero NO refresca:
   //   - el saludo del home (#helloUser)
   //   - el chip de usuario en el topbar (.user-chip .uname)
   //   - el avatar (las iniciales DR)
-  // Los datos quedan desincronizados entre pantallas.
+  // Sólo se sincroniza al recargar la página.
 
-  // [BUG #UX-10] El botón "Guardar" no muestra feedback de éxito explícito;
-  // el usuario no sabe si se guardó.
-  // showToast("Cambios guardados");   ← falta intencional
+  // [BUG #UX-10] Falta feedback de éxito explícito.
+  // showToast("Cambios guardados");
 }
 
 /* ============================================================
-   11. CASHBACK / PROMO
+   13. CASHBACK / PROMO
    ============================================================ */
 
 function claimCashback(){
   // [BUG #LOG-11] El banner dice "Cashback de 5%" pero el cálculo
-  // multiplica el monto por 0.005 (= 0.5%).
+  // multiplica por 0.005 (= 0.5%).
   const ultimaTransferencia = txHistory.find(t => t.who.startsWith("Transferencia"));
   if (!ultimaTransferencia) {
     showToast("Aún no tienes transferencias para activar la promo", true);
@@ -610,29 +783,40 @@ function claimCashback(){
   }
   const cashback = Math.abs(ultimaTransferencia.amount) * 0.005;
   saldo += cashback;
+  persist();
   showToast("Cashback aplicado: S/ " + cashback.toFixed(2));
 }
 
 /* ============================================================
-   12. HELP / FAQ SEARCH
+   14. HELP / FAQ SEARCH
    ============================================================ */
 
-const faqSearchEl = document.getElementById('faqSearch');
-if (faqSearchEl) {
-  faqSearchEl.addEventListener('input', (e) => {
-    // [BUG #LOG-12] El buscador escucha el input pero nunca filtra los
-    // <details>. Escribir cualquier cosa no hace nada visible.
-    const q = e.target.value;
-    void q;
-  });
-}
+document.addEventListener('DOMContentLoaded', () => {
+  const faqSearchEl = document.getElementById('faqSearch');
+  if (faqSearchEl) {
+    faqSearchEl.addEventListener('input', (e) => {
+      // [BUG #LOG-12] El buscador escucha el input pero nunca filtra los
+      // <details>. Escribir cualquier cosa no hace nada visible.
+      const q = e.target.value;
+      void q;
+    });
+  }
+});
 
 /* ============================================================
-   INIT
+   15. RENDER GLOBAL
    ============================================================
    [BUG #A11Y-2] Sin aria-labels, sin aria-disabled, sin role en
    elementos interactivos no nativos (.action, .nav-item, .svc).
    ============================================================ */
 
-renderTx();
-renderCards();
+function renderAll(){
+  renderHomeChrome();
+  renderTx();
+  renderCards();
+  renderMovements();
+  renderProfileForm();
+}
+
+renderAll();
+persist();

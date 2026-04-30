@@ -426,6 +426,7 @@
         </div>
 
         <button class="btn btn-primary" onclick="saveProfile()">Guardar cambios</button>
+        <button class="btn btn-secondary" onclick="resetData()" style="margin-top:8px">Restablecer datos demo</button>
         <button class="btn btn-danger" onclick="logout()" style="margin-top:8px">Cerrar sesión</button>
       </div>
 
@@ -521,6 +522,27 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- ========== MODAL DE BIENVENIDA ========== -->
+<div class="welcome-modal" id="welcomeModal" hidden>
+  <div class="welcome-card">
+    <div class="welcome-icon">👋</div>
+    <h3>¡Hola, <span id="welName">Diego</span>!</h3>
+    <p class="welcome-sub">Estos son tus datos al iniciar sesión</p>
+
+    <div class="welcome-stats">
+      <div class="ws-row"><span>Saldo disponible</span><strong id="welSaldo">S/ 2,450.75</strong></div>
+      <div class="ws-row"><span>Cuenta</span><strong id="welAccount">•••• 4471</strong></div>
+      <div class="ws-row"><span>DNI</span><strong id="welDni">••••5421</strong></div>
+      <div class="ws-row"><span>Email</span><strong id="welEmail">diego@perupay.pe</strong></div>
+      <div class="ws-row"><span>Movimientos</span><strong id="welTxCount">8</strong></div>
+      <div class="ws-row"><span>Tarjetas activas</span><strong id="welCards">2</strong></div>
+    </div>
+
+    <button class="btn btn-primary" onclick="closeWelcome()">Entendido, continuar</button>
+    <div class="last-login" id="welLast">Último acceso: ahora</div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>
